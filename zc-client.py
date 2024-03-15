@@ -60,8 +60,8 @@ class ZachCoinClient (Node):
         print("outbound_node_disconnected: " + connected_node.id)
 
     def node_message(self, connected_node, data):
-        print("node_message from " + connected_node.id + ": " + json.dumps(data,indent=2))
-        #print("node_message from " + connected_node.id)
+        #print("node_message from " + connected_node.id + ": " + json.dumps(data,indent=2))
+        print("node_message from " + connected_node.id)
 
         if data != None:
             if 'type' in data:
@@ -103,8 +103,6 @@ class ZachCoinClient (Node):
             print("prev block or block id incorrect")
             return False
 
-   
-        # Validate proof of work - TODO finish this, mining
         if 'pow' not in block or int(block['pow'], 16) > self.DIFFICULTY:
             print("pow incorrect")
             return False
@@ -134,12 +132,16 @@ class ZachCoinClient (Node):
         
         # check if n tag exists
         
-        if 'output' not in input_block['tx']['output']:
+        if 'output' not in block_tx:
             print("output line 137")
             return False
         
+        for output in block_tx['output']:
+            if not 'value' in output or not 'pub_key' in output:
+                return False
+        
         if 'n' not in block_tx['input'] \
-            or len(block_tx['tx']['output']) <= block_tx["input"]["n"] \
+            or len(block_tx['output']) <= block_tx["input"]["n"] \
              or 0 > block_tx["input"]["n"]:
             print("n failure at 143")
             return False
@@ -201,20 +203,21 @@ class ZachCoinClient (Node):
         outputs = []
         for pair in rec_amt_zip:
             outputs.append({'value': pair[1], 'pub_key': pair[0]})
-
+        print(outputs)
         input_json = {
             'id': chosen_id,
             'n': chosen_output
         }
 
-        sign = skey.sign(json.dump(input_json, sort_keys=True).encode("utf-8")).hex()
+        sign = skey.sign(json.dumps(input_json, sort_keys=True).encode("utf-8")).hex()
+        print("here")
         utx_json = {
             'type': self.TRANSACTION,
             'input': input_json,
             'sig': sign,
             'output': outputs
         }
-
+        print("here2")
         return utx_json
 
     def node_disconnect_with_outbound_node(self, connected_node):
@@ -239,34 +242,37 @@ def fetch_unspent_tx(client: ZachCoinClient, key : VerifyingKey):
 
 def fetch_tx_choice(client: ZachCoinClient, key : VerifyingKey):
     unspent_txs = fetch_unspent_tx(client, key)
-    
     # show user all available transaction blocks on the blockchain to pick
     print("All available transaction blocks in the blockchain")
     for idx, utx_block in enumerate(unspent_txs):
         # unravel each tuple
         block_idx, output_idx = utx_block
         # printing a formatted string to show user details of each unspent tx block
-        print(f"({idx})\tBlock Index: {block_idx}\tOutput Index: {output_idx}\tBlockData: {json.dump(client.blockchain[block_idx]['tx']['output'][output_idx])}")
+        print(f"(Transaction#: {idx})\nBlock Index: {block_idx}\nOutput Index: {output_idx}\nBlockData: {json.dumps(client.blockchain[block_idx]['tx']['output'][output_idx])}")
     client_choice = input("Enter number associated with transaction output: ")
     try:
         client_choice = int(client_choice)
     except:
+        print("conversion error")
         raise Exception("Invalid choice")
     
+
     block_idx, output_idx = unspent_txs[client_choice]
-    return client.blockchain[block_idx]['id'], output_idx
+
+    return client.blockchain[block_idx]['tx']['output'][output_idx]['value'], client.blockchain[block_idx]['id'], output_idx
 
 def process_tx(client: ZachCoinClient, skey : SigningKey,key : VerifyingKey):
     try:
-        chosen_id, chosen_n = fetch_tx_choice(client, key)
-        print(f"Chosen Block ID: {chosen_id}\tChosen Output Number: {chosen_n}")
+        total_val, chosen_id, chosen_n = fetch_tx_choice(client, key)
+        print(f"\nChosen Block ID: {chosen_id}\nChosen Output Number: {chosen_n}")
 
         recipients = []
         quanities = []
 
         recipient = input("Enter recipient's public key: ")
         quantity = input ("Enter transaction quanity: ")
-
+        print(total_val)
+        
         recipient2 = input("(Optional, leave blank) Enter the second recipient's public key -> ")
         if recipient2:
             quantity2 = input("Enter the amount to send -> ")
@@ -278,21 +284,29 @@ def process_tx(client: ZachCoinClient, skey : SigningKey,key : VerifyingKey):
             if quantity <= 0:
                 print("Transfer quantity must be greater than 0")
                 raise Exception("Invalid transaction quantity")
+            
+            if quantity < total_val:
+                selfrep = "c618eaea8d1dbb7c01f619c4f3a50347e1eacad9d1d2c08b43369311584ed1d45bde697a83ff5b4b05a66b2737acbb21"
+                selfval = total_val - quantity
+                recipients.append(selfrep)
+                quanities.append(selfval)
 
-            quantity2 = int(quantity2) 
-            if quantity2 <= 0:
-                print("Transfer quantity must be greater than 0")
-                raise Exception("Invalid transaction quantity")
+
+            # quantity2 = int(quantity2) 
+            # if quantity2 <= 0:
+            #     print("Transfer quantity must be greater than 0")
+            #     raise Exception("Invalid transaction quantity")
             recipients.append(recipient)
-            recipients.append(recipient2)
+            
+            # recipients.append(recipient2)
             quanities.append(quantity)
-            quanities.append(quantity2)
+            # quanities.append(quantity2)
         except:
             raise Exception("Malformed data type for transaction quantity")
         
         utx_data = client.create_tx(skey, chosen_id, chosen_n, recipients, quanities)
 
-        print(f"Creating transaction...{json.dump(utx_data, indent=1)}")
+        print(f"Creating transaction...{json.dumps(utx_data, indent=1)}")
 
         client.send_to_nodes(utx_data)
         return
@@ -300,7 +314,6 @@ def process_tx(client: ZachCoinClient, skey : SigningKey,key : VerifyingKey):
         print("Failure to create/process transaction, try again")
         return
 
-# TODO: refactor this
 def mine_tx(client: ZachCoinClient, vk: VerifyingKey):
     if len(client.utx) == 0:
         print("Error: No unverified transactions in pool to mine.")
@@ -308,24 +321,25 @@ def mine_tx(client: ZachCoinClient, vk: VerifyingKey):
     # prompt user to select a transaction to mine
     print("Select an unverified transaction from the UTX pool:")
     for i, utx in enumerate(client.utx):
-        print("-" * 20)
-        print(f"Unverified transaction # {i} \n{json.dumps(utx, indent=1)}")
-        print("-" * 20)
-    x = input("Enter the number of the transaction -> ")
+        print("*****************************")
+        print(f"Unverified Transaction Number: {i} \n{json.dumps(utx, indent=1)}")
+        print("*****************************")
+    choice = input("Enter the transaction number:  ")
     try:
-        x = int(x)
+        choice = int(choice)
     except:
         print("Error: Invalid transaction number.")
         return None
 
     # check if transaction number is valid
-    if x < 0 or x >= len(client.utx):
+    if choice < 0 or choice >= len(client.utx):
         print("Error: Invalid transaction number.")
         return None
-    utx =  client.utx[x]
+    utx =  client.utx[choice]
 
     # get previous block
     prev = client.blockchain[-1]['id']
+    print(json.dumps(prev))
 
     utx['output'].append({
             "value": client.COINBASE,
@@ -343,6 +357,7 @@ def mine_tx(client: ZachCoinClient, vk: VerifyingKey):
     pow = hashlib.sha256(json.dumps(utx, sort_keys=True).encode(
         'utf8') + prev.encode('utf-8') + nonce.encode('utf-8')).hexdigest()
 
+    prev = client.blockchain[-1]['id']
     # create block
     block = {
         "type": client.BLOCK,
@@ -353,9 +368,32 @@ def mine_tx(client: ZachCoinClient, vk: VerifyingKey):
         "tx": utx
     }
     print("Transaction successfully mined")
+    print(json.dumps(block, indent=1))
     client.send_to_nodes(block)
 
-
+def get_transaction_history(client: ZachCoinClient, vk: VerifyingKey):
+    """
+    Get the transaction history for a user
+    """
+    transaction_history = []
+    for block in client.blockchain:
+        for output in block['tx']['output']:
+            if output['pub_key'] == vk.to_string().hex():
+                transaction_history.append({
+                    'block_id': block['id'],
+                    'output_index': block['tx']['output'].index(output),
+                    'value': output['value'],
+                    'recipient': output['pub_key']
+                })
+    # print transaction history
+    print("Transaction History:")
+    for transaction in transaction_history:
+        print("-" * 20)
+        print(f"Block ID: {transaction['block_id']}")
+        print(f"Output Index: {transaction['output_index']}")
+        print(f"Value: {transaction['value']}")
+        print(f"Recipient: {transaction['recipient']}")
+        print("-" * 20)
 
 def main():
 
@@ -405,7 +443,8 @@ def main():
                   \n\t2: Print UTX pool \
                   \n\t3: Make Transaction \
                   \n\t4: Mine Transactions \
-                  \n\t5: Stop Client \
+                  \n\t5: Get History \
+                  \n\t6: Stop Client \
                   \n\nEnter your choice -> ")
         try:
             x = int(x)
@@ -425,11 +464,10 @@ def main():
         elif x == 4:
             mine_tx(client, vk)
         elif x == 5:
+            get_transaction_history(client, vk)
+        elif x == 5:
             client.stop()
             break
-
-        # TODO: Add options for creating and mining transactions
-        # as well as any other additional features
 
         input()
         
