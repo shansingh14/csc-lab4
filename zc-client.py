@@ -291,16 +291,8 @@ def process_tx(client: ZachCoinClient, skey : SigningKey,key : VerifyingKey):
                 recipients.append(selfrep)
                 quanities.append(selfval)
 
-
-            # quantity2 = int(quantity2) 
-            # if quantity2 <= 0:
-            #     print("Transfer quantity must be greater than 0")
-            #     raise Exception("Invalid transaction quantity")
             recipients.append(recipient)
-            
-            # recipients.append(recipient2)
             quanities.append(quantity)
-            # quanities.append(quantity2)
         except:
             raise Exception("Malformed data type for transaction quantity")
         
@@ -314,28 +306,44 @@ def process_tx(client: ZachCoinClient, skey : SigningKey,key : VerifyingKey):
         print("Failure to create/process transaction, try again")
         return
 
+def get_transaction_number():
+    user_input = input("Enter the transaction number: ")
+    try:
+        transaction_number = int(user_input)
+        return transaction_number
+    except ValueError:
+        print("Error: Not a valid transaction number")
+        return None
+
+def mine_transaction(client, utx, prev):
+   nonce = Random.new().read(AES.block_size).hex()
+   while( int( hashlib.sha256(json.dumps(utx, sort_keys=True).encode('utf8') + prev.encode('utf-8') + nonce.encode('utf-8')).hexdigest(), 16) > client.DIFFICULTY):
+      nonce = Random.new().read(AES.block_size).hex()
+   pow = hashlib.sha256(json.dumps(utx, sort_keys=True).encode('utf8') + prev.encode('utf-8') + nonce.encode('utf-8')).hexdigest()
+   
+   return pow, nonce
+
+
 def mine_tx(client: ZachCoinClient, vk: VerifyingKey):
-    if len(client.utx) == 0:
+    utxs = client.utx
+    
+    if len(utxs) == 0:
         print("Error: No unverified transactions in pool to mine.")
         return
     # prompt user to select a transaction to mine
     print("Select an unverified transaction from the UTX pool:")
-    for i, utx in enumerate(client.utx):
-        print("*****************************")
-        print(f"Unverified Transaction Number: {i} \n{json.dumps(utx, indent=1)}")
-        print("*****************************")
-    choice = input("Enter the transaction number:  ")
-    try:
-        choice = int(choice)
-    except:
-        print("Error: Invalid transaction number.")
-        return None
+    for index in range(len(utxs)):
+        print("----------------------------")
+        print(f"Unverified Transaction Number: {index} \n{json.dumps(utxs[index], indent=1)}")
+        print("----------------------------")
+    
+    user_tn = get_transaction_number()
 
     # check if transaction number is valid
-    if choice < 0 or choice >= len(client.utx):
-        print("Error: Invalid transaction number.")
+    if 0 > user_tn or user_tn >= len(utxs):
+        print("Error: Transaction number out of range")
         return None
-    utx =  client.utx[choice]
+    utx =  utxs[user_tn]
 
     # get previous block
     prev = client.blockchain[-1]['id']
@@ -348,52 +356,23 @@ def mine_tx(client: ZachCoinClient, vk: VerifyingKey):
 
     # mine transaction
     print("Mining block with ID ", utx['input']['id'])
+    pow, nonce = mine_transaction(client, utx, prev)
 
-    # generate nonce until hash is less than difficulty
-    nonce = Random.new().read(AES.block_size).hex()
-    while int(hashlib.sha256(json.dumps(utx, sort_keys=True).encode('utf8') + prev.encode('utf-8') + nonce.encode('utf-8')).hexdigest(), 16) > client.DIFFICULTY:
-        nonce = Random.new().read(AES.block_size).hex()
+    id = hashlib.sha256(json.dumps(utx, sort_keys=True).encode('utf8')).hexdigest()
+    previous_block = client.blockchain[-1]['id']
 
-    pow = hashlib.sha256(json.dumps(utx, sort_keys=True).encode(
-        'utf8') + prev.encode('utf-8') + nonce.encode('utf-8')).hexdigest()
-
-    prev = client.blockchain[-1]['id']
-    # create block
     block = {
         "type": client.BLOCK,
-        "id": hashlib.sha256(json.dumps(utx, sort_keys=True).encode('utf8')).hexdigest(),
+        "id": id,
         "nonce": nonce,
         "pow": pow,
-        "prev": prev,
+        "prev": previous_block,
         "tx": utx
     }
+    
     print("Transaction successfully mined")
     print(json.dumps(block, indent=1))
     client.send_to_nodes(block)
-
-def get_transaction_history(client: ZachCoinClient, vk: VerifyingKey):
-    """
-    Get the transaction history for a user
-    """
-    transaction_history = []
-    for block in client.blockchain:
-        for output in block['tx']['output']:
-            if output['pub_key'] == vk.to_string().hex():
-                transaction_history.append({
-                    'block_id': block['id'],
-                    'output_index': block['tx']['output'].index(output),
-                    'value': output['value'],
-                    'recipient': output['pub_key']
-                })
-    # print transaction history
-    print("Transaction History:")
-    for transaction in transaction_history:
-        print("-" * 20)
-        print(f"Block ID: {transaction['block_id']}")
-        print(f"Output Index: {transaction['output_index']}")
-        print(f"Value: {transaction['value']}")
-        print(f"Recipient: {transaction['recipient']}")
-        print("-" * 20)
 
 def main():
 
@@ -443,7 +422,6 @@ def main():
                   \n\t2: Print UTX pool \
                   \n\t3: Make Transaction \
                   \n\t4: Mine Transactions \
-                  \n\t5: Get History \
                   \n\t6: Stop Client \
                   \n\nEnter your choice -> ")
         try:
@@ -463,8 +441,6 @@ def main():
             process_tx(client, sk, vk)
         elif x == 4:
             mine_tx(client, vk)
-        elif x == 5:
-            get_transaction_history(client, vk)
         elif x == 5:
             client.stop()
             break
